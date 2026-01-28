@@ -245,6 +245,31 @@ register(
     ),
 )
 
+# Zermelo point maze environments (with fluid flow field).
+register(
+    id='zermelo-pointmaze-medium-v0',
+    entry_point='ogbench.locomaze.zermelo_maze:make_zermelo_maze_env',
+    max_episode_steps=1000,
+    kwargs=dict(
+        maze_type='medium',
+    ),
+)
+
+for task_id in [None, 1, 2, 3, 4, 5]:
+    task_suffix = '' if task_id is None else f'-task{task_id}'
+    reward_task_id = 0 if task_id is None else task_id
+
+    register(
+        id=f'zermelo-pointmaze-medium-singletask{task_suffix}-v0',
+        entry_point='ogbench.locomaze.zermelo_maze:make_zermelo_maze_env',
+        max_episode_steps=1000,
+        kwargs=dict(
+            maze_type='medium',
+            reward_task_id=reward_task_id,
+            **singletask_dict,
+        ),
+    )
+
 # Environments for reward-based single-task offline RL.
 for task_id in [None, 1, 2, 3, 4, 5]:
     task_suffix = '' if task_id is None else f'-task{task_id}'
