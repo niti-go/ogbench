@@ -40,6 +40,13 @@ def make_zermelo_maze_env(*args, **kwargs):
             use_oracle_rep=False,
             flow_field_path=None,
             include_flow_in_obs=True,
+            # Reward shaping parameters.
+            goal_reward=1.0,
+            energy_weight=0.0,
+            time_weight=0.0,
+            progress_weight=0.0,
+            timeout_penalty=0.0,
+            drift_threshold=0.01,
             *args,
             **kwargs,
         ):
@@ -52,6 +59,14 @@ def make_zermelo_maze_env(*args, **kwargs):
             self._add_noise_to_goal = add_noise_to_goal
             self._reward_task_id = reward_task_id
             self._use_oracle_rep = use_oracle_rep
+
+            # Reward shaping.
+            self._goal_reward = goal_reward
+            self._energy_weight = energy_weight
+            self._time_weight = time_weight
+            self._progress_weight = progress_weight
+            self._timeout_penalty = timeout_penalty
+            self._drift_threshold = drift_threshold
 
             assert ob_type in ['states', 'pixels']
             assert success_timing in ['pre', 'post']
@@ -317,6 +332,10 @@ def make_zermelo_maze_env(*args, **kwargs):
             return ob, info
 
         def step(self, action):
+            # Track state before step for reward shaping.
+            prev_xy = self.get_xy().copy()
+            prev_dist = np.linalg.norm(prev_xy - self.cur_goal_xy)
+
             if self._success_timing == 'pre':
                 success = self.compute_success()
 
@@ -325,17 +344,46 @@ def make_zermelo_maze_env(*args, **kwargs):
             if self._success_timing == 'post':
                 success = self.compute_success()
 
+            # Compute efficiency-based reward components.
+            curr_xy = self.get_xy()
+            curr_dist = np.linalg.norm(curr_xy - self.cur_goal_xy)
+            action_magnitude = np.linalg.norm(action)
+            is_drifting = action_magnitude < self._drift_threshold
+
+            # Base reward: goal achievement.
             if success:
                 if self._terminate_at_goal:
                     terminated = True
                 info['success'] = 1.0
-                reward = 1.0
+                reward = self._goal_reward
             else:
                 info['success'] = 0.0
                 reward = 0.0
 
+            # Energy cost: penalize action magnitude (powered movement).
+            energy_cost = -self._energy_weight * action_magnitude
+            reward += energy_cost
+
+            # Time cost: constant per-step penalty (every step costs time).
+            reward -= self._time_weight
+
+            # Progress shaping: reward for reducing distance to goal.
+            progress = prev_dist - curr_dist
+            reward += self._progress_weight * progress
+
+            # Timeout penalty: applied when episode truncates without success.
+            if truncated and not success:
+                reward -= self._timeout_penalty
+
+            # Shift for singletask (reward_task_id) environments.
             if self._reward_task_id is not None:
                 reward = reward - 1.0
+
+            # Add shaping components to info for debugging/logging.
+            info['energy_cost'] = energy_cost
+            info['progress'] = progress
+            info['is_drifting'] = float(is_drifting)
+            info['dist_to_goal'] = curr_dist
 
             return ob, reward, terminated, truncated, info
 

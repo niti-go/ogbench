@@ -9,7 +9,7 @@ class FlowField:
 
     def __init__(self, flow_field_path=None):
         if flow_field_path is None:
-            flow_field_path = os.path.join(os.path.dirname(__file__), 'assets', 'default_flow_field.npy')
+            flow_field_path = os.path.join(os.path.dirname(__file__), 'assets', 'yellow_path_field.npy')
         data = np.load(flow_field_path, allow_pickle=True).item()
         self.x_range = data['x_range']
         self.y_range = data['y_range']
@@ -248,6 +248,59 @@ def generate_turbulent_field(save_path=None, seed=0):
     return _save_field(save_path, x_range, y_range, vx, vy, 'turbulent field')
 
 
+def generate_yellow_path_field(save_path=None):
+    """Flow field that makes the upper (yellow) path more efficient than the direct (green) path.
+
+    Creates a clockwise circulation around the maze:
+    - Left side: upward flow (positive vy) to push agent up toward the top route
+    - Top region: rightward flow (positive vx) to carry agent across the top
+    - Right side: downward flow (negative vy) toward the goal
+    - Middle/bottom: leftward flow (negative vx) to block the direct green path
+
+    Maze coordinates: x ∈ [-4,24], y ∈ [-4,24]
+    Standard y-axis: low y = bottom, high y = top, positive vy = upward
+    """
+    if save_path is None:
+        save_path = os.path.join(os.path.dirname(__file__), 'assets', 'yellow_path_field.npy')
+
+    xs, ys, xx, yy, x_range, y_range = _make_grid()
+
+    vx = np.zeros_like(xx)
+    vy = np.zeros_like(yy)
+    
+    # Top middle area (x < 6): strong upward flow to push agent toward top route
+    left_mask = (xx >= -4) & (xx < 6) & (yy<=20)
+    vx[left_mask] = -0.3
+    vy[left_mask] = 1.5  # upward (positive = up)
+
+    # Left column (x < 6): strong upward flow to push agent toward top route
+    left_mask = (xx >= -4) & (xx < 6) & (yy<=20)
+    vx[left_mask] = -0.3
+    vy[left_mask] = 1.5  # upward (positive = up)
+
+    # Top region (y > 14): strong rightward flow across the top
+    top_mask = (yy > 14)
+    vx[top_mask] = 1.8  # rightward
+    vy[top_mask] = -0.2  # slight downward
+
+    # Right column (x > 14): downward flow toward goal area
+    right_mask = (xx > 14)
+    vx[right_mask] = 0.2
+    vy[right_mask] = +1.2  # downward (negative = down)
+
+    # Bottom region (y < 6): leftward flow
+    bottom_mask = (yy < 6)
+    vx[bottom_mask] = 0.2  # rightward
+    vy[bottom_mask] = 0.6 # slight upward
+
+    # Middle corridor (6 < x < 14, 6 < y < 13): leftward + upward to block green path
+    middle_mask = (xx > 6) & (xx < 14) & (yy > 6) & (yy < 14)
+    vx[middle_mask] = -2.0  # leftward blocks direct path
+    vy[middle_mask] = -2.0  # upward pushes toward yellow route
+
+    return _save_field(save_path, x_range, y_range, vx, vy, 'yellow path field')
+
+
 ALL_GENERATORS = {
     'default': generate_default_flow_field,
     'double_vortex': generate_double_vortex_field,
@@ -255,7 +308,102 @@ ALL_GENERATORS = {
     'diagonal_shear': generate_diagonal_shear_field,
     'sink_source': generate_sink_source_field,
     'turbulent': generate_turbulent_field,
+    'yellow_path': generate_yellow_path_field,
 }
+
+
+# Medium maze layout for visualization (1 = wall, 0 = free)
+MEDIUM_MAZE_MAP = np.array([
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 0, 1, 1, 0, 0, 1],
+    [1, 0, 0, 1, 0, 0, 0, 1],
+    [1, 1, 0, 0, 0, 1, 1, 1],
+    [1, 0, 0, 1, 0, 0, 0, 1],
+    [1, 0, 1, 0, 0, 1, 0, 1],
+    [1, 0, 0, 0, 1, 0, 0, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+])
+
+
+def visualize_flow_field(flow_field_path, title='Flow Field', show=True, save_path=None):
+    """Visualize a flow field overlaid on the maze layout.
+
+    Args:
+        flow_field_path: Path to the .npy flow field file
+        title: Title for the plot
+        show: Whether to display the plot interactively
+        save_path: Optional path to save the figure as an image
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+
+    # Load flow field
+    data = np.load(flow_field_path, allow_pickle=True).item()
+    x_range = data['x_range']
+    y_range = data['y_range']
+
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+
+    # Draw maze walls
+    maze_unit = 4.0
+    offset_x, offset_y = 4, 4
+    for i in range(MEDIUM_MAZE_MAP.shape[0]):
+        for j in range(MEDIUM_MAZE_MAP.shape[1]):
+            if MEDIUM_MAZE_MAP[i, j] == 1:
+                x = j * maze_unit - offset_x
+                y = i * maze_unit - offset_y
+                rect = patches.Rectangle(
+                    (x - maze_unit / 2, y - maze_unit / 2),
+                    maze_unit, maze_unit,
+                    linewidth=1, edgecolor='gray', facecolor='white'
+                )
+                ax.add_patch(rect)
+
+    # Create grid for quiver plot (subsample for clarity)
+    n_arrows = 20
+    xs = np.linspace(x_range[0], x_range[1], n_arrows)
+    ys = np.linspace(y_range[0], y_range[1], n_arrows)
+    xx, yy = np.meshgrid(xs, ys)
+
+    # Interpolate flow at arrow positions
+    flow_field = FlowField(flow_field_path)
+    vx, vy = flow_field.get_flow_grid(xs, ys)
+
+    # Compute magnitude for coloring
+    mag = np.sqrt(vx ** 2 + vy ** 2)
+
+    # Plot flow arrows
+    quiver = ax.quiver(
+        xx, yy, vx, vy, mag,
+        cmap='coolwarm', scale=30, width=0.004,
+        headwidth=4, headlength=5
+    )
+    plt.colorbar(quiver, ax=ax, label='Flow magnitude')
+
+    # Set axis properties
+    ax.set_xlim(x_range[0], x_range[1])
+    ax.set_ylim(y_range[0], y_range[1])
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_title(title)
+
+    # Add grid lines at maze cell boundaries
+    for i in range(9):
+        ax.axhline(y=i * maze_unit - offset_y - maze_unit / 2, color='lightgray', linewidth=0.5, alpha=0.5)
+        ax.axvline(x=i * maze_unit - offset_x - maze_unit / 2, color='lightgray', linewidth=0.5, alpha=0.5)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150)
+        print(f'Saved visualization to {save_path}')
+
+    if show:
+        plt.show()
+
+    return fig, ax
 
 
 if __name__ == '__main__':
@@ -264,10 +412,19 @@ if __name__ == '__main__':
     parser.add_argument('--name', type=str, default='all',
                         choices=['all'] + list(ALL_GENERATORS.keys()),
                         help='Which flow field to generate (default: all)')
+    parser.add_argument('--show', action='store_true',
+                        help='Display the flow field visualization')
+    parser.add_argument('--save_image', type=str, default=None,
+                        help='Save visualization to this path (e.g., flow.png)')
     args = parser.parse_args()
 
     if args.name == 'all':
         for name, gen_fn in ALL_GENERATORS.items():
-            gen_fn()
+            path = gen_fn()
+            if args.show or args.save_image:
+                save_path = args.save_image.replace('.', f'_{name}.') if args.save_image else None
+                visualize_flow_field(path, title=f'{name} flow field', show=args.show, save_path=save_path)
     else:
-        ALL_GENERATORS[args.name]()
+        path = ALL_GENERATORS[args.name]()
+        if args.show or args.save_image:
+            visualize_flow_field(path, title=f'{args.name} flow field', show=args.show, save_path=args.save_image)

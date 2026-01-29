@@ -28,6 +28,12 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--flow_field_path', type=str, default=None, help='Path to a .npy flow field file')
     parser.add_argument('--live', action='store_true', help='Show live rendering in a matplotlib window')
+    # Reward shaping parameters.
+    parser.add_argument('--goal_reward', type=float, default=1.0, help='Reward for reaching goal')
+    parser.add_argument('--energy_weight', type=float, default=0.0, help='Penalty weight for action magnitude')
+    parser.add_argument('--time_weight', type=float, default=0.0, help='Per-step penalty when moving (not drifting)')
+    parser.add_argument('--progress_weight', type=float, default=0.0, help='Reward weight for distance reduction')
+    parser.add_argument('--timeout_penalty', type=float, default=0.0, help='Penalty when episode times out')
     args = parser.parse_args()
 
     np.random.seed(args.seed)
@@ -35,6 +41,11 @@ def main():
     env_kwargs = dict(
         terminate_at_goal=False,
         max_episode_steps=args.num_steps + 10,
+        goal_reward=args.goal_reward,
+        energy_weight=args.energy_weight,
+        time_weight=args.time_weight,
+        progress_weight=args.progress_weight,
+        timeout_penalty=args.timeout_penalty,
     )
     if args.flow_field_path is not None:
         env_kwargs['flow_field_path'] = args.flow_field_path
@@ -99,9 +110,11 @@ def main():
         if step % 20 == 0 or step == args.num_steps - 1:
             xy = env.unwrapped.get_xy()
             flow = env.unwrapped._flow_field.get_flow(xy[0], xy[1])
+            drift_str = 'drift' if info.get('is_drifting', 0) > 0.5 else 'move'
             print(f'Step {step:4d} | pos=({xy[0]:6.2f}, {xy[1]:6.2f}) | '
                   f'flow=({flow[0]:5.2f}, {flow[1]:5.2f}) | '
-                  f'reward={reward:.1f} | success={info["success"]:.0f}')
+                  f'd={info.get("dist_to_goal", 0):5.2f} | '
+                  f'r={reward:6.3f} | {drift_str} | success={info["success"]:.0f}')
 
         if terminated or truncated:
             print(f'Episode ended at step {step} (terminated={terminated}, truncated={truncated})')
@@ -124,6 +137,7 @@ def main():
         print('Tip: pass --policy zero to see pure flow drift (no agent action).')
         print('Tip: pass --policy oracle to see BFS-guided navigation through flow.')
         print('Tip: pass --live to watch the episode in real time.')
+        print('Tip: use --energy_weight, --time_weight, --progress_weight for reward shaping.')
 
     if args.live:
         import matplotlib.pyplot as plt
